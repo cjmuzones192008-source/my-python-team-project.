@@ -1,0 +1,596 @@
+"""
+Student Expense Tracker
+ITE 260 - Computer Programming 1
+"""
+
+import json
+import os
+import tempfile
+from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+DATA_FILE = "student_expenses.json"
+
+CATEGORIES = [
+    "Food",
+    "Transportation",
+    "School Supplies",
+    "Personal Needs",
+    "Entertainment",
+    "Other",
+]
+
+CENT = Decimal("0.01")
+
+
+def money_text(amount):
+    """Format money to two decimal places."""
+    return f"{amount.quantize(CENT, rounding=ROUND_HALF_UP):,.2f}"
+
+
+def read_money(prompt):
+    """Accept only positive monetary amounts."""
+    while True:
+        raw = input(prompt).strip()
+
+        try:
+            amount = Decimal(raw)
+
+            if not amount.is_finite():
+                raise InvalidOperation
+
+            if amount <= 0:
+                print("Amount must be greater than zero.")
+                continue
+
+            return amount.quantize(CENT, rounding=ROUND_HALF_UP)
+
+        except (InvalidOperation, ValueError):
+            print("Invalid amount. Example: 150 or 150.50.")
+
+
+def read_date():
+    """Accept a valid date or use today's date."""
+    while True:
+        raw = input(
+            "Enter date (YYYY-MM-DD), or press Enter for today: "
+        ).strip()
+
+        if not raw:
+            return date.today().isoformat()
+
+        try:
+            return date.fromisoformat(raw).isoformat()
+
+        except ValueError:
+            print("Invalid date. Use YYYY-MM-DD.")
+
+
+def choose_category():
+    """Display available expense categories."""
+    print("\nEXPENSE CATEGORIES")
+
+    for number, category in enumerate(CATEGORIES, start=1):
+        print(f"{number}. {category}")
+
+    print("0. Cancel")
+
+    while True:
+        choice = input("Choose category: ").strip()
+
+        if choice == "0":
+            return None
+
+        if choice.isdigit():
+            number = int(choice)
+
+            if 1 <= number <= len(CATEGORIES):
+                return CATEGORIES[number - 1]
+
+        print("Choose a valid category number.")
+
+
+def total_expenses(expenses):
+    """Calculate total spending."""
+    return sum(
+        (Decimal(item["amount"]) for item in expenses),
+        Decimal("0.00")
+    )
+
+
+def load_data():
+    """Load and validate saved data."""
+
+    if not os.path.exists(DATA_FILE):
+        return None, [], True
+
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"\nERROR: Cannot read saved data: {error}")
+        print("The saved file was not changed.")
+        return None, [], False
+
+    if not isinstance(data, dict):
+        print("ERROR: Invalid data file format.")
+        return None, [], False
+
+    if not isinstance(data.get("expenses"), list):
+        print("ERROR: Expense records are invalid.")
+        return None, [], False
+
+    budget = None
+    raw_budget = data.get("budget")
+
+    if raw_budget is not None:
+        try:
+            budget = Decimal(str(raw_budget))
+
+            if not budget.is_finite() or budget <= 0:
+                raise ValueError
+
+            budget = budget.quantize(
+                CENT, rounding=ROUND_HALF_UP
+            )
+
+        except (InvalidOperation, ValueError):
+            print("ERROR: Saved budget is invalid.")
+            return None, [], False
+
+    expenses = []
+    used_ids = set()
+
+    for item in data["expenses"]:
+        if not isinstance(item, dict):
+            print("ERROR: Invalid saved expense record.")
+            return None, [], False
+
+        try:
+            expense_id = item["id"]
+
+            if (
+                isinstance(expense_id, bool)
+                or not isinstance(expense_id, int)
+            ):
+                raise ValueError
+
+            description = item["description"]
+            category = item["category"]
+            expense_date = item["date"]
+
+            if not isinstance(description, str):
+                raise ValueError
+
+            description = description.strip()
+
+            if not description:
+                raise ValueError
+
+            if not isinstance(category, str):
+                raise ValueError
+
+            if category not in CATEGORIES:
+                raise ValueError
+
+            if not isinstance(expense_date, str):
+                raise ValueError
+
+            expense_date = date.fromisoformat(
+                expense_date
+            ).isoformat()
+
+            amount = Decimal(str(item["amount"]))
+
+            if (
+                expense_id <= 0
+                or expense_id in used_ids
+                or not amount.is_finite()
+                or amount <= 0
+            ):
+                raise ValueError
+
+            amount = amount.quantize(
+                CENT, rounding=ROUND_HALF_UP
+            )
+
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            InvalidOperation
+        ):
+            print("ERROR: A saved expense record is invalid.")
+            print("The saved file was not changed.")
+            return None, [], False
+
+        used_ids.add(expense_id)
+
+        expenses.append({
+            "id": expense_id,
+            "description": description,
+            "category": category,
+            "amount": format(amount, ".2f"),
+            "date": expense_date,
+        })
+
+    return budget, expenses, True
+
+
+def save_data(budget, expenses):
+    """Save records using a temporary file."""
+    data = {
+        "budget": (
+            format(budget, ".2f")
+            if budget is not None else None
+        ),
+        "expenses": expenses,
+    }
+
+    folder = os.path.dirname(os.path.abspath(DATA_FILE))
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=folder,
+            prefix=".student_expenses_",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+
+            temp_path = temp_file.name
+
+            json.dump(
+                data,
+                temp_file,
+                indent=4,
+                ensure_ascii=False
+            )
+
+            temp_file.write("\n")
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+
+        os.replace(temp_path, DATA_FILE)
+        return True
+
+    except OSError as error:
+        print(f"ERROR: Could not save data: {error}")
+
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+        return False
+
+
+def display_menu():
+    print("\n" + "=" * 42)
+    print("       STUDENT EXPENSE TRACKER")
+    print("=" * 42)
+    print("1. Set or Update Budget")
+    print("2. Add Expense")
+    print("3. View All Expenses")
+    print("4. View Expense Summary")
+    print("5. View Expenses by Category")
+    print("6. Delete an Expense")
+    print("7. Save and Exit")
+    print("=" * 42)
+
+
+def set_budget(current_budget):
+    print("\nSET OR UPDATE BUDGET")
+
+    if current_budget is not None:
+        print(f"Current budget: {money_text(current_budget)}")
+
+    new_budget = read_money("Enter your budget: ")
+
+    print(f"Budget updated to {money_text(new_budget)}.")
+
+    return new_budget
+
+
+def print_expense(item):
+    print(
+        f"ID: {item['id']} | "
+        f"Date: {item['date']} | "
+        f"{item['description']} | "
+        f"{item['category']} | "
+        f"{money_text(Decimal(item['amount']))}"
+    )
+
+
+def add_expense(expenses):
+    print("\nADD EXPENSE")
+
+    description = input(
+        "Enter description (or type 0 to cancel): "
+    ).strip()
+
+    if description == "0":
+        print("Expense entry cancelled.")
+        return expenses
+
+    if not description:
+        print("Description cannot be empty.")
+        return expenses
+
+    category = choose_category()
+
+    if category is None:
+        print("Expense entry cancelled.")
+        return expenses
+
+    amount = read_money("Enter expense amount: ")
+    expense_date = read_date()
+
+    next_id = max(
+        (item["id"] for item in expenses),
+        default=0
+    ) + 1
+
+    new_expense = {
+        "id": next_id,
+        "description": description,
+        "category": category,
+        "amount": format(amount, ".2f"),
+        "date": expense_date,
+    }
+
+    expenses.append(new_expense)
+
+    print("\nExpense added successfully:")
+    print_expense(new_expense)
+
+    return expenses
+
+
+def view_expenses(expenses):
+    print("\nALL EXPENSES")
+
+    if not expenses:
+        print("No expenses have been recorded.")
+        return
+
+    print("-" * 82)
+
+    print(
+        f"{'ID':<5} {'Date':<12} "
+        f"{'Description':<25} {'Category':<22} {'Amount':>12}"
+    )
+
+    print("-" * 82)
+
+    for item in expenses:
+        description = item["description"][:24]
+
+        print(
+            f"{item['id']:<5} "
+            f"{item['date']:<12} "
+            f"{description:<25} "
+            f"{item['category']:<22} "
+            f"{money_text(Decimal(item['amount'])):>12}"
+        )
+
+    print("-" * 82)
+
+
+def view_summary(budget, expenses):
+    print("\nEXPENSE SUMMARY")
+
+    total = total_expenses(expenses)
+
+    print(
+        "Total budget:       "
+        + (
+            money_text(budget)
+            if budget is not None
+            else "Not set"
+        )
+    )
+
+    print(f"Total expenses:     {money_text(total)}")
+    print(f"Number of expenses: {len(expenses)}")
+
+    if expenses:
+        highest = max(
+            expenses,
+            key=lambda item: Decimal(item["amount"])
+        )
+
+        lowest = min(
+            expenses,
+            key=lambda item: Decimal(item["amount"])
+        )
+
+        print(
+            f"Highest expense:    {highest['description']} "
+            f"({money_text(Decimal(highest['amount']))})"
+        )
+
+        print(
+            f"Lowest expense:     {lowest['description']} "
+            f"({money_text(Decimal(lowest['amount']))})"
+        )
+
+    else:
+        print("Highest expense:    None")
+        print("Lowest expense:     None")
+
+    print("\nSPENDING BY CATEGORY")
+
+    for category in CATEGORIES:
+        category_total = sum(
+            (
+                Decimal(item["amount"])
+                for item in expenses
+                if item["category"] == category
+            ),
+            Decimal("0.00")
+        )
+
+        print(f"{category:<22} {money_text(category_total)}")
+
+    if budget is None:
+        print("\nBudget status: Budget Not Set")
+        return
+
+    remaining = budget - total
+    percentage = (total / budget) * Decimal("100")
+
+    print(f"\nRemaining balance:  {money_text(remaining)}")
+
+    print(
+        "Budget used:        "
+        f"{percentage.quantize(Decimal('0.1'))}%"
+    )
+
+    if total < budget:
+        status = "Within Budget"
+    elif total == budget:
+        status = "Budget Fully Used"
+    else:
+        status = "Over Budget"
+
+    print(f"Budget status:      {status}")
+
+
+def view_by_category(expenses):
+    print("\nVIEW EXPENSES BY CATEGORY")
+
+    category = choose_category()
+
+    if category is None:
+        print("Category search cancelled.")
+        return
+
+    matches = [
+        item for item in expenses
+        if item["category"] == category
+    ]
+
+    if not matches:
+        print(f"No expenses recorded under {category}.")
+        return
+
+    for item in matches:
+        print_expense(item)
+
+    category_total = sum(
+        (Decimal(item["amount"]) for item in matches),
+        Decimal("0.00")
+    )
+
+    print(f"Number of expenses: {len(matches)}")
+    print(f"Category total: {money_text(category_total)}")
+
+
+def delete_expense(expenses):
+    print("\nDELETE AN EXPENSE")
+
+    if not expenses:
+        print("There are no expenses to delete.")
+        return expenses
+
+    view_expenses(expenses)
+
+    raw_id = input(
+        "Enter expense ID to delete (or 0 to cancel): "
+    ).strip()
+
+    if raw_id == "0":
+        print("Deletion cancelled.")
+        return expenses
+
+    if not raw_id.isdigit():
+        print("Invalid ID. Enter a whole number.")
+        return expenses
+
+    expense_id = int(raw_id)
+
+    selected = next(
+        (
+            item for item in expenses
+            if item["id"] == expense_id
+        ),
+        None
+    )
+
+    if selected is None:
+        print("No expense found with that ID.")
+        return expenses
+
+    print("\nSelected expense:")
+    print_expense(selected)
+
+    confirmation = input(
+        "Delete this expense? (y/n): "
+    ).strip().lower()
+
+    if confirmation != "y":
+        print("Deletion cancelled.")
+        return expenses
+
+    expenses.remove(selected)
+
+    print("Expense deleted successfully.")
+
+    return expenses
+
+
+def main():
+    budget, expenses, load_ok = load_data()
+
+    if not load_ok:
+        print("\nProgram stopped to protect your saved data.")
+        return
+
+    print("\nWelcome to Student Expense Tracker!")
+
+    if budget is None and not expenses:
+        print("Start by setting your budget.")
+
+    while True:
+        display_menu()
+
+        choice = input("Choose an option (1-7): ").strip()
+
+        if choice == "1":
+            budget = set_budget(budget)
+
+        elif choice == "2":
+            expenses = add_expense(expenses)
+
+        elif choice == "3":
+            view_expenses(expenses)
+
+        elif choice == "4":
+            view_summary(budget, expenses)
+
+        elif choice == "5":
+            view_by_category(expenses)
+
+        elif choice == "6":
+            expenses = delete_expense(expenses)
+
+        elif choice == "7":
+            if save_data(budget, expenses):
+                print(
+                    f"Data saved to {DATA_FILE}. Goodbye!"
+                )
+                break
+
+            print("Saving failed. You may try again.")
+
+        else:
+            print("Invalid choice. Enter a number from 1 to 7.")
+
+
+if __name__ == "__main__":
+    main()
