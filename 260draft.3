@@ -1,0 +1,246 @@
+import json
+import os
+from datetime import date
+from decimal import Decimal, InvalidOperation
+
+FILE = "student_expenses.json"
+CATEGORIES = [
+    "Food", "Transportation", "School Supplies",
+    "Personal Needs", "Entertainment", "Other"
+]
+
+
+def money(value):
+    return f"{Decimal(str(value)):,.2f}"
+
+
+def get_amount(prompt):
+    while True:
+        try:
+            value = Decimal(input(prompt).strip())
+            if value.is_finite() and value > 0:
+                return value.quantize(Decimal("0.01"))
+        except InvalidOperation:
+            pass
+        print("Enter a valid amount greater than zero.")
+
+
+def choose_category():
+    for i, name in enumerate(CATEGORIES, 1):
+        print(f"{i}. {name}")
+    while True:
+        choice = input("Choose category (0 to cancel): ").strip()
+        if choice == "0":
+            return None
+        if choice.isdigit() and 1 <= int(choice) <= len(CATEGORIES):
+            return CATEGORIES[int(choice) - 1]
+        print("Invalid category choice.")
+
+
+def load_data():
+    if not os.path.exists(FILE):
+        return None, []
+
+    try:
+        with open(FILE, encoding="utf-8") as f:
+            data = json.load(f)
+
+        budget = data.get("budget")
+        expenses = data.get("expenses", [])
+
+        if not isinstance(data, dict) or not isinstance(expenses, list):
+            raise ValueError
+
+        if budget is not None and Decimal(str(budget)) <= 0:
+            raise ValueError
+
+        for item in expenses:
+            if not isinstance(item, dict):
+                raise ValueError
+            item["id"] = int(item["id"])
+            item["amount"] = str(Decimal(item["amount"]).quantize(
+                Decimal("0.01")))
+            date.fromisoformat(item["date"])
+            if (item["id"] <= 0 or not item["description"].strip()
+                    or item["category"] not in CATEGORIES
+                    or Decimal(item["amount"]) <= 0):
+                raise ValueError
+
+        return budget, expenses
+
+    except (OSError, ValueError, TypeError, KeyError,
+            InvalidOperation, json.JSONDecodeError):
+        print("Saved data is invalid or unreadable. Check the data file.")
+        return None, None
+
+
+def save_data(budget, expenses):
+    try:
+        with open(FILE, "w", encoding="utf-8") as f:
+            json.dump({"budget": budget, "expenses": expenses}, f, indent=4)
+        return True
+    except OSError:
+        print("Could not save data.")
+        return False
+
+
+def show_expense(item):
+    print(f"ID: {item['id']} | Date: {item['date']} | "
+          f"{item['description']} | {item['category']} | "
+          f"{money(item['amount'])}")
+
+
+def add_expense(expenses):
+    description = input("Description (blank to cancel): ").strip()
+    if not description:
+        return
+
+    category = choose_category()
+    if category is None:
+        return
+
+    raw_date = input("Date (YYYY-MM-DD, blank for today): ").strip()
+    try:
+        expense_date = (
+            date.fromisoformat(raw_date).isoformat()
+            if raw_date else date.today().isoformat()
+        )
+    except ValueError:
+        print("Invalid date. Expense not added.")
+        return
+
+    expenses.append({
+        "id": max((x["id"] for x in expenses), default=0) + 1,
+        "date": expense_date,
+        "description": description,
+        "category": category,
+        "amount": str(get_amount("Enter amount: "))
+    })
+    print("Expense added successfully.")
+
+
+def view_expenses(expenses):
+    if not expenses:
+        print("No expenses have been recorded.")
+        return
+
+    for item in expenses:
+        show_expense(item)
+
+
+def view_summary(budget, expenses):
+    total = sum(
+        (Decimal(x["amount"]) for x in expenses), Decimal("0")
+    )
+
+    print("\nEXPENSE SUMMARY")
+    print("Total budget:", money(budget) if budget else "Not set")
+    print("Total expenses:", money(total))
+    print("Number of expenses:", len(expenses))
+
+    if expenses:
+        highest = max(expenses, key=lambda x: Decimal(x["amount"]))
+        lowest = min(expenses, key=lambda x: Decimal(x["amount"]))
+        print("Highest expense:", highest["description"],
+              money(highest["amount"]))
+        print("Lowest expense:", lowest["description"],
+              money(lowest["amount"]))
+    else:
+        print("Highest expense: None")
+        print("Lowest expense: None")
+
+    print("\nSpending by category:")
+    for name in CATEGORIES:
+        subtotal = sum(
+            (Decimal(x["amount"]) for x in expenses
+             if x["category"] == name), Decimal("0")
+        )
+        print(f"{name}: {money(subtotal)}")
+
+    if budget is not None:
+        remaining = Decimal(str(budget)) - total
+        print("Remaining balance:", money(remaining))
+        print("Budget used:", f"{total / Decimal(str(budget)) * 100:.1f}%")
+        print("Budget status:",
+              "Over Budget" if total > Decimal(str(budget))
+              else "Budget Fully Used" if total == Decimal(str(budget))
+              else "Within Budget")
+    else:
+        print("Budget status: Budget Not Set")
+
+
+def view_by_category(expenses):
+    category = choose_category()
+    if category is None:
+        return
+
+    matches = [x for x in expenses if x["category"] == category]
+    view_expenses(matches)
+
+    if matches:
+        total = sum(Decimal(x["amount"]) for x in matches)
+        print("Category total:", money(total))
+
+
+def delete_expense(expenses):
+    view_expenses(expenses)
+    if not expenses:
+        return
+
+    try:
+        number = int(input("Enter expense ID to delete (0 to cancel): "))
+    except ValueError:
+        print("Invalid ID.")
+        return
+
+    item = next((x for x in expenses if x["id"] == number), None)
+
+    if number == 0:
+        return
+    if item is None:
+        print("Expense not found.")
+    elif input("Delete this expense? (y/n): ").lower() == "y":
+        expenses.remove(item)
+        print("Expense deleted successfully.")
+
+
+def main():
+    budget, expenses = load_data()
+    if expenses is None:
+        return
+
+    while True:
+        print("\nSTUDENT EXPENSE TRACKER")
+        print("1. Set or Update Budget")
+        print("2. Add Expense")
+        print("3. View All Expenses")
+        print("4. View Expense Summary")
+        print("5. View Expenses by Category")
+        print("6. Delete an Expense")
+        print("7. Save and Exit")
+
+        choice = input("Choose an option (1-7): ").strip()
+
+        if choice == "1":
+            budget = str(get_amount("Enter your budget: "))
+            print("Budget updated.")
+        elif choice == "2":
+            add_expense(expenses)
+        elif choice == "3":
+            view_expenses(expenses)
+        elif choice == "4":
+            view_summary(budget, expenses)
+        elif choice == "5":
+            view_by_category(expenses)
+        elif choice == "6":
+            delete_expense(expenses)
+        elif choice == "7":
+            if save_data(budget, expenses):
+                print("Data saved. Goodbye!")
+                break
+        else:
+            print("Invalid choice. Enter 1-7.")
+
+
+if __name__ == "__main__":
+    main()
